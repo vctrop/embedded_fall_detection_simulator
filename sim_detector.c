@@ -1,4 +1,4 @@
-// Verificar bibliotecas
+/*
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -6,13 +6,20 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>		// inet_aton
+#include <arpa/inet.h>
 #include <pthread.h>
 #include <netdb.h> 
+*/
 
-#include <stdint.h>         // architecture independent integer types
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
-#define WINDOW_SIZE ?
+#define WINDOW_SIZE 1024
+#define SERVER_PORT 49000
 
 struct geo_location{
     float latitude;
