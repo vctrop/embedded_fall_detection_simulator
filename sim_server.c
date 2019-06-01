@@ -1,17 +1,6 @@
-/*#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <pthread.h>
-#include <errno.h>
-*/
-
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -27,8 +16,10 @@ pthread_mutex_t mutex_accept = PTHREAD_MUTEX_INITIALIZER;
 Node* connections = list_create();
 int head_id = 0;
 
+
 // A thread is assigned to each connected device
 void* device_handler(void* id);
+int connected_devices = 0;
 
 int main(int argc, char *argv[]) {
     int serv_sockfd, new_sockfd, port_num, temp_ret;
@@ -66,6 +57,8 @@ int main(int argc, char *argv[]) {
             exit(-1);
         }
         
+        connected_devices++;
+        
         // Insert a node in the connections list and create a thread to handle the device connection
         pthread_mutex_lock(&mutex_accept);
             connections = list_insert(connections, head_id, new_sockfd);
@@ -78,9 +71,20 @@ int main(int argc, char *argv[]) {
 }
 
 void* device_handler(void* id){
+    // TODO:
+    // Requests to be sent:
+    // - Get GPS location
+    // - Enable accelerometer data display
+    // - Disable accelerometer data display
+    // Information to be received:
+    // - Fall alert (sporadic)
+    // - GPS location (once, when requested)
+    // - Accelerometer data (continuously, when enabled)
+
     int dev_id = (int) id;
     
-    
+    while (1){
+        
+    }
     
 }
-

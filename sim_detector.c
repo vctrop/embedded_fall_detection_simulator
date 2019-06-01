@@ -1,32 +1,23 @@
-/*
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <pthread.h>
-#include <netdb.h> 
-*/
-
-#include <stdio.h>
-#include <stdlib.h>
 #include <pthread.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netdb.h>
 
 #define WINDOW_SIZE 1024
 #define SERVER_PORT 49000
 
-struct geo_location{
+typedef struct gps_location{
     float latitude;
     float longitude;
-};
+} GPS; 
 
-struct geo_location current_location = {0.0, 0.0};
+GPS current_location = {0.0, 0.0};
+
+int flag_display = 0;                   // Enabled by server, send accelerometer data when true    
 
 // Sensor threads
 void* read_gps(void* arg);
@@ -59,14 +50,19 @@ void* read_accelerometer(void* arg){
 void* estimate_fall(void* arg){
     while(1){
         // Read window from buffer, extract features and apply decision function
-        // If fall is detected, wake up socket writer thread
     }
 }
 
 void* read_socket(void* arg){
-    // Decode server requests
+    // Server requests to be decoded:
+    // - Get GPS location
+    // - Enable accelerometer data display
+    // - Disable accelerometer data display
 }
 
 void* write_socket(void* arg){
-    // Send fall alert or info by server request
+    // Information to be sent:
+    // - Fall alert
+    // - GPS location, when requested
+    // - Accelerometer data, when enabled
 }
