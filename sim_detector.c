@@ -8,11 +8,17 @@
 #include <netdb.h>
 #include <time.h>
 #include <signal.h>
-
+#include <errno.h>
 #include "periodic_signals.h"
 
 #define WINDOW_SIZE 1024
 #define SERVER_PORT 49000
+#define GPS_BSIZE 80
+
+#define GPS_PERIOD
+#define SENSOR_PERIOD
+#define DETECTOR_PERIOD
+
 
 typedef struct gps_location{
     float latitude;
@@ -50,11 +56,29 @@ int main(int argc, char *argv[]) {
 
 void* read_gps(void* arg){
     struct periodic_info info;
+    char filename[] = "go_track_trackspoints.csv";
+    char gps_buffer[GPS_BSIZE];
+    FILE *fd;
+    char *field;
+    
+    fd = fopen(filename, 'r');
+    if (fd == NULL){
+        perror("Error opening GPS csv:");
+        exit(-1);
+    }
     
     make_periodic (, &info);
     while(1){
         // Load csv file circularly and update current_location;
+        if (!fgets(buffer, GPS_BSIZE, fd))
+            rewind(fp);
         
+        field = strtok(buffer, ",");                // ignore first field
+        
+        field = strtok(NULL, ",");
+        current_location.latitude = atof(field);    // get latitude
+        field = strtok(NULL, ",");
+        current_location.longitude = atof(field);   // get latitude
         
         wait_period (&info);
     }
@@ -89,6 +113,9 @@ void* read_socket(void* arg){
     // - Get GPS location
     // - Enable accelerometer data display
     // - Disable accelerometer data display
+    while (1){
+        
+    }
 }
 
 void* write_socket(void* arg){
@@ -96,4 +123,7 @@ void* write_socket(void* arg){
     // - Fall alert
     // - GPS location, when requested
     // - Accelerometer data, when enabled
+    while (1){
+        
+    }
 }
