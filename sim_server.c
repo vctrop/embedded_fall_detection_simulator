@@ -11,6 +11,10 @@
 #define SERVER_PORT 49000
 #define MAX_DEVICES 50
 
+#define RQST_LOCATION	    1	
+#define RQST_DATA_ENABLE    1
+#define RQST_DATA_DISABLE   -1
+
 pthread_mutex_t mutex_accept = PTHREAD_MUTEX_INITIALIZER;
 
 Node* connections = list_create();

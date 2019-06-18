@@ -15,6 +15,10 @@
 #define SERVER_PORT 49000
 #define GPS_BSIZE 80
 
+#define RQST_LOCATION	    1	
+#define RQST_DATA_ENABLE    1
+#define RQST_DATA_DISABLE   -1	
+
 #define GPS_PERIOD
 #define SENSOR_PERIOD
 #define DETECTOR_PERIOD
@@ -28,6 +32,10 @@ typedef struct gps_location{
 GPS current_location = {0.0, 0.0};
 
 int flag_display = 0;                   // Enabled by server, send accelerometer data when true    
+int flag_location = 0;
+
+char fall_detected = 0;
+int sockfd;
 
 // Sensor threads
 void* read_gps(void* arg);
@@ -113,9 +121,14 @@ void* read_socket(void* arg){
     // - Get GPS location
     // - Enable accelerometer data display
     // - Disable accelerometer data display
+    char request_buffer[2];
+    
+    
     while (1){
-        
-    }
+        // clear buffer
+        // receive socket
+        // check field 1 for location request and 2 for data transfer enable
+    }	// set flags
 }
 
 void* write_socket(void* arg){
@@ -123,7 +136,13 @@ void* write_socket(void* arg){
     // - Fall alert
     // - GPS location, when requested
     // - Accelerometer data, when enabled
+    char info_buffer[]		// Fall, [loc available, x, y] [data available, DATA]
+    
     while (1){
-        
+        // put fall state in buffer, clear fall state
+        // put flag_location in buffer, clear flag_location
+        // put x, y in buffer
+        // put data_av in buffer, put data in buffer
+        // send buffer and check for errors
     }
 }
