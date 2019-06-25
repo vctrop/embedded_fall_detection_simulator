@@ -9,33 +9,36 @@
 #include <time.h>
 #include <signal.h>
 #include <errno.h>
+#include <math.h>
 #include "periodic_signals.h"
 
-#define WINDOW_SIZE 1024
+#define WINDOW_SIZE 151
 #define SERVER_PORT 49000
 #define GPS_BSIZE 80
+#define ACQUISITION_BSIZE 90
 
-#define RQST_LOCATION	    1	
 #define RQST_DATA_ENABLE    1
-#define RQST_DATA_DISABLE   -1	
+#define RQST_DATA_DISABLE   -1
+#define RQST_LOCATION	    2	
 
 #define GPS_PERIOD
 #define SENSOR_PERIOD
 #define DETECTOR_PERIOD
 
-
 typedef struct gps_location{
     float latitude;
     float longitude;
-} GPS; 
+} GPS;
 
+// Global variables
 GPS current_location = {0.0, 0.0};
-
-int flag_display = 0;                   // Enabled by server, send accelerometer data when true    
-int flag_location = 0;
-
-char fall_detected = 0;
-int sockfd;
+short int flag_display = 0;                     // Set by server, send accelerometer data when true    
+short int flag_location = 0;                    // Set by server, send location
+char fall_detected = 0; 
+int sockfd;                                     
+float magnitude_buffer[2*WINDOW_SIZE];             // Circular double buffer to keep sensor data
+int sb_index = 0;                               // Sensor buffer index
+short int buf_dirty_half = 1;                   // Indicates which buffer half is dirty 
 
 // Sensor threads
 void* read_gps(void* arg);
@@ -58,8 +61,7 @@ int main(int argc, char *argv[]) {
         sigaddset(&alarm_sig, i);
     sigprocmask(SIG_BLOCK, &alarm_sig, NULL);
     
-    
-    return 0; 
+    return 0;
 }
 
 void* read_gps(void* arg){
@@ -78,10 +80,10 @@ void* read_gps(void* arg){
     make_periodic (, &info);
     while(1){
         // Load csv file circularly and update current_location;
-        if (!fgets(buffer, GPS_BSIZE, fd))
-            rewind(fp);
+        if (!fgets(gps_buffer, GPS_BSIZE, fd))
+            rewind(fd);
         
-        field = strtok(buffer, ",");                // ignore first field
+        field = strtok(gps_buffer, ",");                // ignore first field
         
         field = strtok(NULL, ",");
         current_location.latitude = atof(field);    // get latitude
@@ -94,11 +96,39 @@ void* read_gps(void* arg){
 
 void* read_accelerometer(void* arg){
     struct periodic_info info;
+    char filename[] = "3d_full_data.csv";
+    char acquisition_buffer[ACQUISITION_BSIZE];
+    FILE *fd;
+    char *field;
+    double signal_mag, axis_h, axis_j, axis_k;
+    
+    fd = fopen(filename, 'r');
+    if (fd == NULL){
+        perror("Error opening sensor csv:");
+        exit(-1);
+    }
     
     make_periodic (, &info);
     while(1){
-        // Load data from csv to a circular buffer at a sampling frequency
+        // Load data from csv, calculate signal magnitude and store in a circular buffer
+        if (!fgets(acquisiton_buffer, ACQUISITION_BSIZE, fd))
+            rewind(fd);
         
+        field = strtok(acquisiton_buffer, ",");
+        axis_h = atof(field);
+        field = strtok(NULL, ",");
+        axis_j = atof(field);
+        field = strtok(NULL, ",");
+        axis_k = atof(field);
+        signal_mag = sqrt(pow(axis_h,2) + pow(axis_j,2) + pow(axis_k,2));
+        
+        // Store magnitude in circular buffer
+        magnitude_buffer[sb_index] = (float) signal_mag;
+        sb_index = (sb_index+1)%(2*WINDOW_SIZE);
+        if (sb_index == 0)
+            buf_dirty_half = 0;
+        else if (sb_index == 151)
+            buf_dirty_half = 1;
         
         wait_period (&info);
     }
@@ -106,11 +136,20 @@ void* read_accelerometer(void* arg){
 
 void* estimate_fall(void* arg){
     struct periodic_info info;
+    int window_begin, window_end;
+    int i, mag_i;                              // Indices for parameters and magnitude buffer
+    float parameter_vec[WINDOW_SIZE];
+    float dot_product;
     
     make_periodic (, &info);
     while(1){
         // Read window from buffer, extract features and apply decision function
-        
+        dot_product = 0.0;
+        for(i = 0; i < WINDOW_SIZE; i++){
+            mag_i = i + (1 - buf_dirty_half) * WINDOW_SIZE;
+            dot_product += parameter_vec[i] * magnitude_buffer[mag_i];
+
+        }
         
         wait_period (&info);
     }
@@ -121,13 +160,12 @@ void* read_socket(void* arg){
     // - Get GPS location
     // - Enable accelerometer data display
     // - Disable accelerometer data display
-    char request_buffer[2];
-    
+    char request_buffer[1];
     
     while (1){
         // clear buffer
         // receive socket
-        // check field 1 for location request and 2 for data transfer enable
+        // check field 1 for location request and 2 for data transfer enable/disable
     }	// set flags
 }
 
