@@ -12,10 +12,11 @@
 #include <math.h>
 #include "periodic_signals.h"
 
-#define WINDOW_SIZE 151
 #define SERVER_PORT 49000
 #define GPS_BSIZE 80
 #define ACQUISITION_BSIZE 90
+#define WINDOW_SIZE 151
+#define NUM_FEATURES 3
 
 #define RQST_DATA_ENABLE    1
 #define RQST_DATA_DISABLE   -1
@@ -36,7 +37,7 @@ short int flag_display = 0;                     // Set by server, send accelerom
 short int flag_location = 0;                    // Set by server, send location
 char fall_detected = 0; 
 int sockfd;                                     
-float magnitude_buffer[2*WINDOW_SIZE];             // Circular double buffer to keep sensor data
+float data_buffer[2*WINDOW_SIZE];             // Circular double buffer to keep sensor data
 int sb_index = 0;                               // Sensor buffer index
 short int buf_dirty_half = 1;                   // Indicates which buffer half is dirty 
 
@@ -60,6 +61,8 @@ int main(int argc, char *argv[]) {
     for (i= SIGRTMIN; i <= SIGRTMAX; i++){
         sigaddset(&alarm_sig, i);
     sigprocmask(SIG_BLOCK, &alarm_sig, NULL);
+    
+    memset(&data_buffer, 0, 2*WINDOW_SIZE*(sizeof float));
     
     return 0;
 }
@@ -100,7 +103,7 @@ void* read_accelerometer(void* arg){
     char acquisition_buffer[ACQUISITION_BSIZE];
     FILE *fd;
     char *field;
-    double signal_mag, axis_h, axis_j, axis_k;
+    double axis_h, axis_j, axis_k;
     
     fd = fopen(filename, 'r');
     if (fd == NULL){
@@ -110,7 +113,7 @@ void* read_accelerometer(void* arg){
     
     make_periodic (, &info);
     while(1){
-        // Load data from csv, calculate signal magnitude and store in a circular buffer
+        // Load data from csv and insert j dimension in circular buffer
         if (!fgets(acquisiton_buffer, ACQUISITION_BSIZE, fd))
             rewind(fd);
         
@@ -120,10 +123,10 @@ void* read_accelerometer(void* arg){
         axis_j = atof(field);
         field = strtok(NULL, ",");
         axis_k = atof(field);
-        signal_mag = sqrt(pow(axis_h,2) + pow(axis_j,2) + pow(axis_k,2));
+        // signal_mag = sqrt(pow(axis_h,2) + pow(axis_j,2) + pow(axis_k,2));
         
         // Store magnitude in circular buffer
-        magnitude_buffer[sb_index] = (float) signal_mag;
+        data_buffer[sb_index] = (float) axis_j;
         sb_index = (sb_index+1)%(2*WINDOW_SIZE);
         if (sb_index == 0)
             buf_dirty_half = 0;
@@ -137,20 +140,34 @@ void* read_accelerometer(void* arg){
 void* estimate_fall(void* arg){
     struct periodic_info info;
     int window_begin, window_end;
-    int i, mag_i;                              // Indices for parameters and magnitude buffer
-    float parameter_vec[WINDOW_SIZE];
+    int i, buffer_i;                     
     float dot_product;
+    float sum, average, std;
+    int zero_cross_count;
     
     make_periodic (, &info);
     while(1){
-        // Read window from buffer, extract features and apply decision function
-        dot_product = 0.0;
+        // Extract features (average, zero_cross_count)
+        sum = 0.0;
         for(i = 0; i < WINDOW_SIZE; i++){
-            mag_i = i + (1 - buf_dirty_half) * WINDOW_SIZE;
-            dot_product += parameter_vec[i] * magnitude_buffer[mag_i];
-
+            buffer_i = i + (1 - buf_dirty_half) * WINDOW_SIZE;
+            sum += data_buffer[buffer_i];
         }
+        average = sum/WINDOW_SIZE;
         
+        zero_cross_count = 0;
+        for(i = 0; i < WINDOW_SIZE; i++){
+            buffer_i = i + (1 - buf_dirty_half) * WINDOW_SIZE;
+            if((data_buffer[buffer_i]-average)*(data_buffer[(buffer_i-1)%WINDOW_SIZE]-average) < 0)     // if sign has changed
+        }       zero_cross_count++;
+        
+        // Predict
+        dot_product = (-0.00740976)*average + (-0.09174859)*zero_cross_count;
+        if dot_product > 0:
+            fall_detected = 1;
+        else
+            fall_detected = 0;
+            
         wait_period (&info);
     }
 }
