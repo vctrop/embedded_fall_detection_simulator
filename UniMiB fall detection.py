@@ -11,30 +11,65 @@ import matplotlib.pyplot as plt
 import ml_slippage
 from sklearn.linear_model import SGDClassifier
 from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import LinearSVC
 
 sensor_data = scipy.io.loadmat('UniMiB SHAR dataset/two_classes_data.mat')['two_classes_data']
 labels_data = scipy.io.loadmat('UniMiB SHAR dataset/two_classes_labels.mat')['two_classes_labels'][:,0]
 
-X_train, X_test, y_train, y_test = train_test_split(sensor_data, labels_data, test_size=0.33, random_state=42)
+#sensor_data_h = sensor_data[:, 0:151]
+sensor_data_j = sensor_data[:, 151:302]
+#sensor_data_k = sensor_data[:, 302:453]
 
-for i in xrange(0, 151):
-    X_train[:, i] = np.sqrt(X_train[:, i]**2 + X_train[:, i+151]**2 + X_test[:, i+252]**2)
+# Extract signal magnitude vector (SMV)
+# sig_mag_vec = np.array([])
+# for i in xrange(0, 151):
+    # smv_column = sensor_data[:, i]**2 + sensor_data[:, i+151]**2 + sensor_data[:, i+302]**2
+    # if i == 0:
+        # sig_mag_vec = smv_column
+    # else:
+        # sig_mag_vec = np.column_stack((sig_mag_vec, smv_column))
 
+## Extract features        
+transformed_windows = []
+#for window in sig_mag_vec:    
+for window  in sensor_data_j:
+    average = sum(window)/len(window)
+    #std = np.std(window, ddof=1)
+    #window = (window - average)/std;
+    window = window - average
+    z_cross_count = 0
+    for i, sample in enumerate(window):
+        if i > 0 and window[i]*window[i-1] < 0:
+            z_cross_count += 1
+    transformed_windows.append([average, z_cross_count])
+    
+# print np.array(transformed_windows).shape
+# print transformed_windows[-200:], labels_data[-200:]
+
+
+X_train, X_test, y_train, y_test = train_test_split(transformed_windows, labels_data, shuffle=True, test_size=0.3, random_state=42)
+#X_train, X_test, y_train, y_test = train_test_split(sig_mag_vec, labels_data, test_size=0.33, random_state=42)
+#clf = SGDClassifier(class_weight='balanced', early_stopping=False,loss='log', penalty='l2', max_iter=2000, tol=1e-5, shuffle=False, n_iter_no_change=10, random_state = 42)
+#clf = RandomForestClassifier(random_state=42)
+clf = LinearSVC(random_state=42, C = 0.1, max_iter = 5000)
+clf.fit(X_train, y_train)
+print "Decision vector = " + str(clf.coef_)
+print "Score = " + str(clf.score(X_test, y_test))
+#print clf.predict(X_test[0:20])
+#print clf.decision_function(X_test[0:20])
 
 ## Plotting
-sensor_data_h = sensor_data[:, 0:151]
-sensor_data_j = sensor_data[:, 151:302]
-sensor_data_k = sensor_data[:, 302:453]
-flat_h = sensor_data_h.flatten()
-flat_j = sensor_data_j.flatten()
-flat_k = sensor_data_k.flatten()
-flat_smv = np.sqrt(flat_h**2 + flat_j**2 + flat_k**2)
-flat_labels = []
-for i in xrange(0, len(flat_h)):
-    windowed_index = i/151
-    flat_labels.append(labels_data[windowed_index])
+# flat_h = sensor_data_h.flatten()
+# flat_j = sensor_data_j.flatten()
+# flat_k = sensor_data_k.flatten()
+# flat_smv = np.sqrt(flat_h**2 + flat_j**2 + flat_k**2)
+# flat_labels = []
+# for i in xrange(0, len(flat_h)):
+    # windowed_index = i/151
+    # flat_labels.append(labels_data[windowed_index])
 
-print len(flat_labels), len(labels_data), len(flat_h)
+# print len(flat_labels), len(labels_data), len(flat_h)
     
 ## Plot raw axis
 # plt.figure(figsize=(20,1))
