@@ -1,3 +1,5 @@
+#undef putchar
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -8,6 +10,7 @@
 
 #include "linked_list.h"
 
+#define SOCK_SEND_BSIZE 1547
 #define SERVER_PORT 49000
 #define MAX_DEVICES 50
 
@@ -80,12 +83,57 @@ void* data_handler(void* id){
     // - Fall alert (sporadic)
     // - GPS location (once, when requested)
     // - Accelerometer data (continuously, when enabled)
-
-    int data_id = (int) id;
+    char info_buffer[SOCK_SEND_BSIZE];
+    char latitude_string[18];
+    char longitude_string[18];
+    char data_string[11];
+    int handler_id = (int) id;
+    int n;
+    int i, char_i, buffer_i, data_buffer_i;
+    Nodo* temp_nodo;
     
     while (1){
-        memset(&, 0, sizeof );
-        
+        memset(&info_buffer, NULL, SOCK_SEND_BSIZE);
+        temp_nodo = list_search(connections, handler_id);
+        n = read(temp_nodo->newsockfd, info_buffer, SOCK_SEND_BSIZE);
+        if (n != 0){
+            if (n < 0){
+                perror("Error on socket reading");
+                exit(-1);
+            }
+            
+            printf("[MESSAGE RECEIVED]\n");
+            // Check for fall detection
+            if (info_buffer[0])
+                printf("FALL DETECTED\n");
+            
+            // Check for location information
+            if (info_buffer[1]){
+                buffer_i = 3;
+                printf("(latitude, longitude) = (");
+                for(char_i = 0; char_i < 17; char_i++, buffer_i++)
+                    latitude_string[i] = info_buffer[buffer_i]; 
+                for(char_i = 0; char_i < 17; char_i++, buffer_i++)
+                    longitude_string[i] = info_buffer[buffer_i]; 
+                printf("%s,%s)\n", latitude_string, longitude_string);
+            }
+            
+            // Check for data window
+            if (info_buffer[2]){                    // If data window is present
+                printf("Received data: ");
+                for(buffer_i = 37; buffer_i < SOCK_SEND_BSIZE; buffer_i++){
+                    putchar(info_buffer[buffer_i]);
+                    if ((buffer_i - 37) % 10 == 0)              // put a space after each number
+                        putchar(' ');
+                }
+            }
+        }
+        else{
+            printf("Client %d disconected, closing connection and removing unused nodo\n", handler_id);
+            close(temp_nodo->newsockfd);
+            list_remove(nodo_list, handler_id);
+            pthread_exit(NULL);
+        }
     }
     
 }

@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <sched.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -10,18 +11,25 @@
 #include <signal.h>
 #include <errno.h>
 #include <math.h>
+
 #include "periodic_signals.h"
 
+// General definitions
+#define NUM_THREADS 5
+// Server definitions
 #define SERVER_PORT 49000
+#define SERVER_ADDRESS "127.0.0.1"
+// Request definitions
+#define RQST_DATA_ENABLE    1
+#define RQST_DATA_DISABLE   -1
+#define RQST_LOCATION	    2	
+// Data definitions
+#define SOCK_SEND_BSIZE 1547
 #define GPS_BSIZE 80
 #define ACQUISITION_BSIZE 90
 #define WINDOW_SIZE 151
 #define NUM_FEATURES 3
-
-#define RQST_DATA_ENABLE    1
-#define RQST_DATA_DISABLE   -1
-#define RQST_LOCATION	    2	
-
+// Periodic definitions
 #define GPS_PERIOD
 #define SENSOR_PERIOD
 #define DETECTOR_PERIOD
@@ -32,37 +40,76 @@ typedef struct gps_location{
 } GPS;
 
 // Global variables
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+
 GPS current_location = {0.0, 0.0};
-short int flag_display = 0;                     // Set by server, send accelerometer data when true    
-short int flag_location = 0;                    // Set by server, send location
-char fall_detected = 0; 
-int sockfd;                                     
-float data_buffer[2*WINDOW_SIZE];             // Circular double buffer to keep sensor data
+char flag_display = 0;                     // Set by server, send accelerometer data when true    
+char flag_location = 0;                    // Set by server, send location
+char flag_fall_detected = 0; 
+short int send_socket = 0;                 // Set by buffer crossing, fall detection or gps request, cleared when socket is sent
+                          
+float data_buffer[2*WINDOW_SIZE];               // Circular double buffer to keep sensor data
 int sb_index = 0;                               // Sensor buffer index
 short int buf_dirty_half = 1;                   // Indicates which buffer half is dirty 
 
-// Sensor threads
-void* read_gps(void* arg);
-void* read_accelerometer(void* arg);
 
-// Signal processing and classification thread
-void* estimate_fall(void* arg);
-
-// Socket communication threads
-void* read_socket(void* arg);
-void* write_socket(void* arg);
+// Threads
+void* read_gps(void* arg);                      // GPS acquisition thread
+void* read_accelerometer(void* arg);            // Accelerometer acquisition thread
+void* estimate_fall(void* arg);                 // Thread to apply signal processing and classification
+void* read_socket(void* arg);                   // 
+void* write_socket(void* arg);                  // Socket communication threads
 
 int main(int argc, char *argv[]) {
     int i;
     sigset_t alarm_sig;
+    void* threads_vec[NUM_THREADS];
+    pthread_t temp_thread;
+    struct sockaddr_in serv_addr;
+    cpu_set_t cpu_set;
     
-    // Initially block all RT signals
+    // Block all RT signals, so they can be used for the timers (this has to be done before any threads are created)
     sigemptyset(&alarm_sig);
-    for (i= SIGRTMIN; i <= SIGRTMAX; i++){
+    for (i= SIGRTMIN; i <= SIGRTMAX; i++)
         sigaddset(&alarm_sig, i);
     sigprocmask(SIG_BLOCK, &alarm_sig, NULL);
     
-    memset(&data_buffer, 0, 2*WINDOW_SIZE*(sizeof float));
+    // Stabilish connection with server
+    sockfd = socket(AF_INET, SOCK_STREAM, NULL);                    // Create connection-oriented socket descriptor using IPv4 protocol
+    if (sockfd < 0){
+        perror("Error creating socket:");
+        exit(-1);
+    }
+    memset((char*) &serv_addr, NULL, sizeof(serv_addr));            // Clear server address structure
+    serv_addr.sin_family = AF_INET;                                 // Stabilish address family
+    inet_aton(SERVER_ADDRESS, &serv_addr.sin_addr);                 // Convert server address from IPv4 numbers-and-dots to network byte order
+    serv_addr.sin_port = htons(SERVER_PORT);                        
+    while(connect(sockfd, (struct sockaddr*) &serv_addr, sizeof(serv_addr)) < 0)    // Only advance when connection succeed
+        perror("Error when stabilishing connection (trying again):");
+    
+    // Clear data buffer
+    memset(data_buffer, NULL, 2*WINDOW_SIZE*(sizeof float));        // Clear data buffer
+    
+    // Initiate threads
+    CPU_ZERO(&cpu_set);                                             //
+    CPU_SET(0, &cpu_set);                                           // Only CPU 0 is used by the threads        
+    threads_vec[0] = read_gps;
+    threads_vec[1] = read_accelerometer;
+    threads_vec[2] = estimate_fall;
+    threads_vec[3] = read_socket;
+    threads_vec[4] = write_socket;
+    for (i=0; i<NUM_THREADS; i++){
+        if(pthread_create(&temp_thread, NULL, threads_vec[i], NULL)){
+            perror("Error on thread creation:");
+            exit(-1);
+        }
+        pthread_setaffinity_np(&temp_thread, sizeof cpu_set_t, &cpu_set);
+    }
+    
+    while(1){
+        
+    }
     
     return 0;
 }
@@ -123,15 +170,21 @@ void* read_accelerometer(void* arg){
         axis_j = atof(field);
         field = strtok(NULL, ",");
         axis_k = atof(field);
-        // signal_mag = sqrt(pow(axis_h,2) + pow(axis_j,2) + pow(axis_k,2));
         
-        // Store magnitude in circular buffer
+        // Store dimension j in circular buffer
         data_buffer[sb_index] = (float) axis_j;
         sb_index = (sb_index+1)%(2*WINDOW_SIZE);
-        if (sb_index == 0)
-            buf_dirty_half = 0;
-        else if (sb_index == 151)
-            buf_dirty_half = 1;
+        if(sb_index == 0 or sb_index == 151){
+            if (sb_index == 0)
+                buf_dirty_half = 0;
+            else
+                buf_dirty_half = 1;
+            
+            if (flag_display == 1){
+                send_socket = 1;
+                pthread_cond_signal(&cond);
+            }
+        }
         
         wait_period (&info);
     }
@@ -163,10 +216,12 @@ void* estimate_fall(void* arg){
         
         // Predict
         dot_product = (-0.00740976)*average + (-0.09174859)*zero_cross_count;
-        if dot_product > 0:
-            fall_detected = 1;
+        if (dot_product > 0){
+            flag_fall_detected = 1;
+            send_socket = 1;
+        }
         else
-            fall_detected = 0;
+            (flag_fall_detected = 0);
             
         wait_period (&info);
     }
@@ -178,12 +233,31 @@ void* read_socket(void* arg){
     // - Enable accelerometer data display
     // - Disable accelerometer data display
     char request_buffer[1];
+    int num_bytes;
     
     while (1){
-        // clear buffer
-        // receive socket
-        // check field 1 for location request and 2 for data transfer enable/disable
-    }	// set flags
+        memset(request_buffer, NULL, sizeof char);             // clear buffer
+        num_bytes = read(sockfd, request_buffer, 1);        // receive data from socket
+        if(num_bytes < 0){
+            perror("Error on socket reading:");
+            exit(-1);
+        }
+        printf("Received request = %d\n", (int) request_buffer[0]);
+        switch(request_buffer[0]){
+            case RQST_LOCATION:                             // Check for location request
+                flag_location = 1;
+                send_socket = 1;
+                break;
+            
+            case RQST_DATA_ENABLE:                          // Check for data display enable request
+                flag_display = 1;
+                break;
+            
+            case RQST_DATA_DISABLE:                         // Check for data display disable request
+                flag_display = 0;
+                break;
+        }   
+    }  
 }
 
 void* write_socket(void* arg){
@@ -191,13 +265,66 @@ void* write_socket(void* arg){
     // - Fall alert
     // - GPS location, when requested
     // - Accelerometer data, when enabled
-    char info_buffer[]		// Fall, [loc available, x, y] [data available, DATA]
+    int i, char_i, buffer_i, data_buffer_i;
+    int re
+    char coordinate_string[18];
+    char data_string[11];
+    char info_buffer[SOCK_SEND_BSIZE]		// Fall, [loc available, x, y] [data available, DATA]
     
     while (1){
-        // put fall state in buffer, clear fall state
-        // put flag_location in buffer, clear flag_location
-        // put x, y in buffer
-        // put data_av in buffer, put data in buffer
-        // send buffer and check for errors
+        pthread_mutex_lock(&mutex);
+            while(send_socket == 0)                     //
+                pthread_cond_wait(&cond, &mutex);       // Wait on condition variable send_socket
+            send_socket = 0;
+            printf("Sending socket\n");
+            info_buffer[0] = flag_fall_detected;        //
+            info_buffer[1] = flag_location;             //
+            info_buffer[2] = flag_display;              // Put flags in info buffer
+            if (flag_fall_detected)
+                flag_fall_detected = 0;           
+            
+            if(flag_location){
+                // Fulfill info_buffer with location data (info_buffer[3:20[ <- latitude, info_buffer[20, 37[ <- longitude)
+                flag_location = 0;
+                buffer_i = 3;
+                printf("Buffering GPS data to send\n");
+                ret = gcvt(current_location.latitude, 15, coordinate_string);         // Convert latitude to string using 15 digits
+                if(ret == 0){
+                    perror("Error when converting float to string:");
+                    exit(-1);
+                }
+                for(char_i=0; char_i<17; char_i++, buffer_i++)
+                    info_buffer[buffer_i] = coordinate_string[char_i];
+                ret = gcvt(current_location.longitude, 15, coordinate_string);        // Convert longitude to string using 15 digits
+                if(ret == 0){
+                    perror("Error when converting float to string:");
+                    exit(-1);
+                }
+                for(char_i=0; char_i<17; char_i++, buffer_i++)
+                    info_buffer[buffer_i] = coordinate_string[char_i];
+            }
+
+            if(flag_display){
+                // Fulfill info_buffer with accelerometer data, info_buffer[37:1547[
+                buffer_i = 37;
+                printf("Buffering sensor data to send\n");
+                for(i = 0; i < WINDOW_SIZE; i++){
+                    data_buffer_i = i + (1 - buf_dirty_half) * WINDOW_SIZE;
+                    ret = gcvt(data_buffer[data_buffer_i], 8, data_string);
+                    if(ret == 0){
+                        perror("Error when converting float to string:");
+                        exit(-1);
+                    }
+                    for(char_i = 0; char_i<11; char_i++, buffer_i++)
+                        info_buffer[buffer_i] = data_string[char_i];
+                }
+            }
+        pthread_mutex_unlock(&mutex);
+        ret = send(sockfd, info_buffer, SOCK_SEND_BSIZE, NULL);
+        if (ret < 0){
+            perror("Error on socket writing:");
+            exit(-1);
+        }
+        
     }
 }
