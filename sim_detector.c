@@ -1,45 +1,56 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <sched.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <netdb.h>
 #include <time.h>
 #include <signal.h>
 #include <errno.h>
 #include <math.h>
-
-#include "periodic_signals.h"
+//#include "periodic_signals.h"
 
 // General definitions
 #define NUM_THREADS 5
 // Server definitions
-#define SERVER_PORT 49000
 #define SERVER_ADDRESS "127.0.0.1"
 // Request definitions
 #define RQST_DATA_ENABLE    1
 #define RQST_DATA_DISABLE   -1
 #define RQST_LOCATION	    2	
 // Data definitions
-#define SOCK_SEND_BSIZE 1547
+#define SOCK_SEND_BSIZE 1698			// 3 + 17*2 + 11*151
 #define GPS_BSIZE 80
 #define ACQUISITION_BSIZE 90
 #define WINDOW_SIZE 151
 #define NUM_FEATURES 3
 // Periodic definitions
-#define GPS_PERIOD
-#define SENSOR_PERIOD
-#define DETECTOR_PERIOD
+#define GPS_PERIOD		5000000		// 5s
+#define SENSOR_PERIOD		  20000		// 0.02s
+#define DETECTOR_PERIOD		3020000		// 3.02 s
 
+// Periodic signals
+struct periodic_info{
+	int sig;
+	sigset_t alarm_sig;
+};
+static int make_periodic (int unsigned us_period, struct periodic_info *info);
+static void wait_period (struct periodic_info *info);
+
+// Application
 typedef struct gps_location{
     float latitude;
     float longitude;
 } GPS;
 
 // Global variables
+int sockfd;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 
@@ -62,34 +73,40 @@ void* read_socket(void* arg);                   //
 void* write_socket(void* arg);                  // Socket communication threads
 
 int main(int argc, char *argv[]) {
-    int i;
+    int i, portno;
     sigset_t alarm_sig;
     void* threads_vec[NUM_THREADS];
     pthread_t temp_thread;
     struct sockaddr_in serv_addr;
     cpu_set_t cpu_set;
     
+    if (argc < 2) {
+        perror("Error, port undefined:");
+        exit(-1);
+    }
+    portno = atoi(argv[1]);
+    
     // Block all RT signals, so they can be used for the timers (this has to be done before any threads are created)
     sigemptyset(&alarm_sig);
     for (i= SIGRTMIN; i <= SIGRTMAX; i++)
         sigaddset(&alarm_sig, i);
-    sigprocmask(SIG_BLOCK, &alarm_sig, NULL);
+    sigprocmask(SIG_BLOCK, &alarm_sig, 0);
     
     // Stabilish connection with server
-    sockfd = socket(AF_INET, SOCK_STREAM, NULL);                    // Create connection-oriented socket descriptor using IPv4 protocol
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);                    // Create connection-oriented socket descriptor using IPv4 protocol
     if (sockfd < 0){
         perror("Error creating socket:");
         exit(-1);
     }
-    memset((char*) &serv_addr, NULL, sizeof(serv_addr));            // Clear server address structure
+    memset((char*) &serv_addr, 0, sizeof(serv_addr));            // Clear server address structure
     serv_addr.sin_family = AF_INET;                                 // Stabilish address family
     inet_aton(SERVER_ADDRESS, &serv_addr.sin_addr);                 // Convert server address from IPv4 numbers-and-dots to network byte order
-    serv_addr.sin_port = htons(SERVER_PORT);                        
+    serv_addr.sin_port = htons(portno);                        
     while(connect(sockfd, (struct sockaddr*) &serv_addr, sizeof(serv_addr)) < 0)    // Only advance when connection succeed
         perror("Error when stabilishing connection (trying again):");
     
     // Clear data buffer
-    memset(data_buffer, NULL, 2*WINDOW_SIZE*(sizeof float));        // Clear data buffer
+    memset(data_buffer, 0, 2*WINDOW_SIZE*(sizeof(float)));        // Clear data buffer
     
     // Initiate threads
     CPU_ZERO(&cpu_set);                                             //
@@ -100,11 +117,11 @@ int main(int argc, char *argv[]) {
     threads_vec[3] = read_socket;
     threads_vec[4] = write_socket;
     for (i=0; i<NUM_THREADS; i++){
-        if(pthread_create(&temp_thread, NULL, threads_vec[i], NULL)){
+        if(pthread_create(&temp_thread, 0, threads_vec[i], 0)){
             perror("Error on thread creation:");
             exit(-1);
         }
-        pthread_setaffinity_np(&temp_thread, sizeof cpu_set_t, &cpu_set);
+        pthread_setaffinity_np(temp_thread, sizeof(cpu_set_t), &cpu_set);
     }
     
     while(1){
@@ -121,13 +138,13 @@ void* read_gps(void* arg){
     FILE *fd;
     char *field;
     
-    fd = fopen(filename, 'r');
-    if (fd == NULL){
+    fd = fopen(filename, "r");
+    if (!fd){
         perror("Error opening GPS csv:");
         exit(-1);
     }
     
-    make_periodic (, &info);
+    make_periodic (GPS_PERIOD, &info);
     while(1){
         // Load csv file circularly and update current_location;
         if (!fgets(gps_buffer, GPS_BSIZE, fd))
@@ -138,33 +155,34 @@ void* read_gps(void* arg){
         field = strtok(NULL, ",");
         current_location.latitude = atof(field);    // get latitude
         field = strtok(NULL, ",");
-        current_location.longitude = atof(field);   // get latitude
+        current_location.longitude = atof(field);   // get longitude
         
+        printf("Current location = %f, %f\n", current_location.latitude, current_location.longitude);
         wait_period (&info);
     }
 }
 
 void* read_accelerometer(void* arg){
     struct periodic_info info;
-    char filename[] = "3d_full_data.csv";
+    char filename[] = "3d_partial_data.csv";
     char acquisition_buffer[ACQUISITION_BSIZE];
     FILE *fd;
     char *field;
     double axis_h, axis_j, axis_k;
     
-    fd = fopen(filename, 'r');
-    if (fd == NULL){
+    fd = fopen(filename, "r");
+    if (!fd){
         perror("Error opening sensor csv:");
         exit(-1);
     }
     
-    make_periodic (, &info);
+    make_periodic (SENSOR_PERIOD, &info);
     while(1){
         // Load data from csv and insert j dimension in circular buffer
-        if (!fgets(acquisiton_buffer, ACQUISITION_BSIZE, fd))
+        if (!fgets(acquisition_buffer, ACQUISITION_BSIZE, fd))
             rewind(fd);
         
-        field = strtok(acquisiton_buffer, ",");
+        field = strtok(acquisition_buffer, ",");
         axis_h = atof(field);
         field = strtok(NULL, ",");
         axis_j = atof(field);
@@ -172,21 +190,25 @@ void* read_accelerometer(void* arg){
         axis_k = atof(field);
         
         // Store dimension j in circular buffer
-        data_buffer[sb_index] = (float) axis_j;
-        sb_index = (sb_index+1)%(2*WINDOW_SIZE);
-        if(sb_index == 0 or sb_index == 151){
-            if (sb_index == 0)
-                buf_dirty_half = 0;
-            else
-                buf_dirty_half = 1;
-            
-            if (flag_display == 1){
-                send_socket = 1;
-                pthread_cond_signal(&cond);
-            }
-        }
+        pthread_mutex_lock(&mutex);
+	        data_buffer[sb_index] = (float) axis_j;
+	        sb_index = (sb_index+1)%(2*WINDOW_SIZE);
+	        if((sb_index == 0) || (sb_index == 151)){
+	            if (sb_index == 0)
+	                buf_dirty_half = 0;
+	            else
+	                buf_dirty_half = 1;
+	            
+	            if (flag_display == 1){
+	                send_socket = 1;
+	                pthread_cond_signal(&cond);
+	            }
+        	}
+	pthread_mutex_unlock(&mutex);	
         
+        //printf("GOT ACCELEROMETER = %f\n", axis_j);
         wait_period (&info);
+        
     }
 }
 
@@ -198,7 +220,7 @@ void* estimate_fall(void* arg){
     float sum, average, std;
     int zero_cross_count;
     
-    make_periodic (, &info);
+    make_periodic (DETECTOR_PERIOD, &info);
     while(1){
         // Extract features (average, zero_cross_count)
         sum = 0.0;
@@ -212,16 +234,17 @@ void* estimate_fall(void* arg){
         for(i = 0; i < WINDOW_SIZE; i++){
             buffer_i = i + (1 - buf_dirty_half) * WINDOW_SIZE;
             if((data_buffer[buffer_i]-average)*(data_buffer[(buffer_i-1)%WINDOW_SIZE]-average) < 0)     // if sign has changed
-        }       zero_cross_count++;
-        
+                zero_cross_count++;
+        }
         // Predict
         dot_product = (-0.00740976)*average + (-0.09174859)*zero_cross_count;
         if (dot_product > 0){
             flag_fall_detected = 1;
             send_socket = 1;
+            pthread_cond_signal(&cond);
         }
         else
-            (flag_fall_detected = 0);
+            flag_fall_detected = 0;
             
         wait_period (&info);
     }
@@ -236,27 +259,35 @@ void* read_socket(void* arg){
     int num_bytes;
     
     while (1){
-        memset(request_buffer, NULL, sizeof char);             // clear buffer
+        memset(request_buffer, 0, sizeof(char));             // clear buffer
         num_bytes = read(sockfd, request_buffer, 1);        // receive data from socket
         if(num_bytes < 0){
             perror("Error on socket reading:");
             exit(-1);
         }
-        printf("Received request = %d\n", (int) request_buffer[0]);
-        switch(request_buffer[0]){
-            case RQST_LOCATION:                             // Check for location request
-                flag_location = 1;
-                send_socket = 1;
-                break;
-            
-            case RQST_DATA_ENABLE:                          // Check for data display enable request
-                flag_display = 1;
-                break;
-            
-            case RQST_DATA_DISABLE:                         // Check for data display disable request
-                flag_display = 0;
-                break;
-        }   
+        //printf("Received request = %d\n", (int) request_buffer[0]);
+        if(request_buffer[0]){
+	        pthread_mutex_lock(&mutex);
+	        switch(request_buffer[0]){
+	            case RQST_LOCATION:                             // Check for location request
+	            	printf("Received location request\n");
+	                flag_location = 1;
+	                send_socket = 1;
+	                pthread_cond_signal(&cond);
+	                break;
+	            
+	            case RQST_DATA_ENABLE:                          // Check for data display enable request
+	                printf("Received data display enable request\n");
+	                flag_display = 1;
+	                break;
+	            
+	            case RQST_DATA_DISABLE:                         // Check for data display disable request
+	                printf("Received data display disable request\n");
+	               	flag_display = 0;
+	                break;
+        	}   
+        	pthread_mutex_unlock(&mutex);
+	}	
     }  
 }
 
@@ -266,10 +297,10 @@ void* write_socket(void* arg){
     // - GPS location, when requested
     // - Accelerometer data, when enabled
     int i, char_i, buffer_i, data_buffer_i;
-    int re
+    int ret;
     char coordinate_string[18];
     char data_string[11];
-    char info_buffer[SOCK_SEND_BSIZE]		// Fall, [loc available, x, y] [data available, DATA]
+    char info_buffer[SOCK_SEND_BSIZE];		// Fall, [loc available, x, y] [data available, DATA]
     
     while (1){
         pthread_mutex_lock(&mutex);
@@ -289,19 +320,29 @@ void* write_socket(void* arg){
                 buffer_i = 3;
                 printf("Buffering GPS data to send\n");
                 ret = gcvt(current_location.latitude, 15, coordinate_string);         // Convert latitude to string using 15 digits
+                printf("latitude: ");
+                puts(coordinate_string);
+                
                 if(ret == 0){
                     perror("Error when converting float to string:");
                     exit(-1);
                 }
-                for(char_i=0; char_i<17; char_i++, buffer_i++)
+                for(char_i=0; char_i<17; char_i++, buffer_i++){
                     info_buffer[buffer_i] = coordinate_string[char_i];
+                    //printf("%c", info_buffer[buffer_i]);
+                }
+                
                 ret = gcvt(current_location.longitude, 15, coordinate_string);        // Convert longitude to string using 15 digits
+                printf("longitude: ");
+                puts(coordinate_string);
                 if(ret == 0){
                     perror("Error when converting float to string:");
                     exit(-1);
                 }
-                for(char_i=0; char_i<17; char_i++, buffer_i++)
+                for(char_i=0; char_i<17; char_i++, buffer_i++){
                     info_buffer[buffer_i] = coordinate_string[char_i];
+            	    //printf("%c", info_buffer[buffer_i]);
+            	}
             }
 
             if(flag_display){
@@ -309,6 +350,7 @@ void* write_socket(void* arg){
                 buffer_i = 37;
                 printf("Buffering sensor data to send\n");
                 for(i = 0; i < WINDOW_SIZE; i++){
+                    buffer_i = 37 + i * 11;
                     data_buffer_i = i + (1 - buf_dirty_half) * WINDOW_SIZE;
                     ret = gcvt(data_buffer[data_buffer_i], 8, data_string);
                     if(ret == 0){
@@ -317,14 +359,66 @@ void* write_socket(void* arg){
                     }
                     for(char_i = 0; char_i<11; char_i++, buffer_i++)
                         info_buffer[buffer_i] = data_string[char_i];
+		    info_buffer[buffer_i-1] = ' ';  			// put space at the end of each number                           
                 }
             }
-        pthread_mutex_unlock(&mutex);
-        ret = send(sockfd, info_buffer, SOCK_SEND_BSIZE, NULL);
+        
+        ret = send(sockfd, info_buffer, SOCK_SEND_BSIZE, 0);
+        printf("Buffer sent to socket\n");
         if (ret < 0){
             perror("Error on socket writing:");
             exit(-1);
         }
+        pthread_mutex_unlock(&mutex);
         
     }
+}
+
+// PERIODIC SIGNALS (Third party)
+static int make_periodic (int unsigned us_period, struct periodic_info *info)
+{
+	static int next_sig;
+	int ret;
+	unsigned int ns;
+	unsigned int sec;
+	struct sigevent sigev;
+	timer_t timer_id;
+	struct itimerspec itval;
+
+	/* Initialise next_sig first time through. We can't use static
+	   initialisation because SIGRTMIN is a function call, not a constant */
+	if (next_sig == 0)
+		next_sig = SIGRTMIN;
+	/* Check that we have not run out of signals */
+	if (next_sig > SIGRTMAX)
+		return -1;
+	info->sig = next_sig;
+	next_sig++;
+	/* Create the signal mask that will be used in wait_period */
+	sigemptyset (&(info->alarm_sig));
+	sigaddset (&(info->alarm_sig), info->sig);
+
+	/* Create a timer that will generate the signal we have chosen */
+	sigev.sigev_notify = SIGEV_SIGNAL;
+	sigev.sigev_signo = info->sig;
+	sigev.sigev_value.sival_ptr = (void *) &timer_id;
+	ret = timer_create (CLOCK_MONOTONIC, &sigev, &timer_id);
+	if (ret == -1)
+		return ret;
+
+	/* Make the timer periodic */
+	sec = us_period/1000000;
+	ns = (us_period - (sec * 1000000)) * 1000;
+	itval.it_interval.tv_sec = sec;
+	itval.it_interval.tv_nsec = ns;
+	itval.it_value.tv_sec = sec;
+	itval.it_value.tv_nsec = ns;
+	ret = timer_settime (timer_id, 0, &itval, NULL);
+	return ret;
+}
+
+static void wait_period (struct periodic_info *info)
+{
+	int sig;
+	sigwait (&(info->alarm_sig), &sig);
 }

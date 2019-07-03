@@ -17,9 +17,9 @@ from sklearn.svm import LinearSVC
 sensor_data = scipy.io.loadmat('UniMiB SHAR dataset/two_classes_data.mat')['two_classes_data']
 labels_data = scipy.io.loadmat('UniMiB SHAR dataset/two_classes_labels.mat')['two_classes_labels'][:,0]
 
-#sensor_data_h = sensor_data[:, 0:151]
+sensor_data_h = sensor_data[:, 0:151]
 sensor_data_j = sensor_data[:, 151:302]
-#sensor_data_k = sensor_data[:, 302:453]
+sensor_data_k = sensor_data[:, 302:453]
 
 # Extract signal magnitude vector (SMV)
 # sig_mag_vec = np.array([])
@@ -31,38 +31,38 @@ sensor_data_j = sensor_data[:, 151:302]
         # sig_mag_vec = np.column_stack((sig_mag_vec, smv_column))
 
 ## Extract features        
-transformed_windows = []
-#for window in sig_mag_vec:    
-for window  in sensor_data_j:
-    average = sum(window)/len(window)
-    #std = np.std(window, ddof=1)
-    #window = (window - average)/std;
-    window = window - average
-    z_cross_count = 0
-    for i, sample in enumerate(window):
-        if i > 0 and window[i]*window[i-1] < 0:
-            z_cross_count += 1
-    transformed_windows.append([average, z_cross_count])
+# transformed_windows = []
+# #for window in sig_mag_vec:    
+# for window  in sensor_data_j:
+    # average = sum(window)/len(window)
+    # #std = np.std(window, ddof=1)
+    # #window = (window - average)/std;
+    # window = window - average
+    # z_cross_count = 0
+    # for i, sample in enumerate(window):
+        # if i > 0 and window[i]*window[i-1] < 0:
+            # z_cross_count += 1
+    # transformed_windows.append([average, z_cross_count])
     
 # print np.array(transformed_windows).shape
 # print transformed_windows[-200:], labels_data[-200:]
 
 
-X_train, X_test, y_train, y_test = train_test_split(transformed_windows, labels_data, shuffle=True, test_size=0.3, random_state=42)
+# X_train, X_test, y_train, y_test = train_test_split(transformed_windows, labels_data, shuffle=True, test_size=0.3, random_state=42)
 #X_train, X_test, y_train, y_test = train_test_split(sig_mag_vec, labels_data, test_size=0.33, random_state=42)
 #clf = SGDClassifier(class_weight='balanced', early_stopping=False,loss='log', penalty='l2', max_iter=2000, tol=1e-5, shuffle=False, n_iter_no_change=10, random_state = 42)
 #clf = RandomForestClassifier(random_state=42)
-clf = LinearSVC(random_state=42, C = 0.1, max_iter = 5000)
-clf.fit(X_train, y_train)
-print "Decision vector = " + str(clf.coef_)
-print "Score = " + str(clf.score(X_test, y_test))
+# clf = LinearSVC(random_state=42, C = 0.1, max_iter = 5000)
+# clf.fit(X_train, y_train)
+# print "Decision vector = " + str(clf.coef_)
+# print "Score = " + str(clf.score(X_test, y_test))
 #print clf.predict(X_test[0:20])
 #print clf.decision_function(X_test[0:20])
 
 ## Plotting
-# flat_h = sensor_data_h.flatten()
-# flat_j = sensor_data_j.flatten()
-# flat_k = sensor_data_k.flatten()
+flat_h = sensor_data_h.flatten()
+flat_j = sensor_data_j.flatten()
+flat_k = sensor_data_k.flatten()
 # flat_smv = np.sqrt(flat_h**2 + flat_j**2 + flat_k**2)
 # flat_labels = []
 # for i in xrange(0, len(flat_h)):
@@ -137,5 +137,7 @@ print "Score = " + str(clf.score(X_test, y_test))
 # plt.show()
 
 ## Save raw data
-#stacked_flat = np.column_stack((np.column_stack((flat_h, flat_j)), flat_k))
-#np.savetxt('3d_full_data.csv', stacked_flat, delimiter=',')
+# stacked_flat = np.column_stack((np.column_stack((flat_h, flat_j)), flat_k))
+# np.savetxt('3d_full_data.csv', stacked_flat, delimiter=',')
+stacked_flat_partial = np.vstack((np.column_stack((np.column_stack((flat_h, flat_j)), flat_k))[0:10000,:], np.column_stack((np.column_stack((flat_h, flat_j)), flat_k))[-10000:-1,:]))
+np.savetxt('3d_partial_data.csv', stacked_flat_partial, delimiter=',')

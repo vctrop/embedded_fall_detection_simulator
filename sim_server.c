@@ -1,26 +1,42 @@
 #undef putchar
+// periodic includes
+#include <signal.h>
+#include <time.h>
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <errno.h>
 
-#include "linked_list.h"
+//#include "linked_list.h"
+//#include "periodic_signals.h"
 
-#define SOCK_SEND_BSIZE 1547
-#define SERVER_PORT 49000
+#define SOCK_SEND_BSIZE 1698			// 3 + 17*2 + 11*151
 #define MAX_DEVICES 50
 
 #define RQST_DATA_ENABLE    1
 #define RQST_DATA_DISABLE   -1
 #define RQST_LOCATION	    2	
 
-pthread_mutex_t mutex_accept = PTHREAD_MUTEX_INITIALIZER;
+// Linked lists
+typedef struct node {
+    int id;
+    int newsockfd;
+    struct node* next;
+} Node;
+Node* list_create(void);
+Node* list_insert(Node* node, int id, int my_sockfd);
+Node* list_search(Node* node, int id);
+Node* list_remove(Node* node, int id);
 
-Node* connections = list_create();
+// Application
+pthread_mutex_t mutex_accept = PTHREAD_MUTEX_INITIALIZER;
+Node* connections;
 int head_id = 0;
 
 // A thread is assigned to each connected device
@@ -29,13 +45,19 @@ void* request_handler(void* id);
 int connected_devices = 0;
 
 int main(int argc, char *argv[]) {
-    int serv_sockfd, new_sockfd, port_num, temp_ret;
+    int serv_sockfd, new_sockfd, port_num, temp_ret, portno;
     struct sockaddr_in serv_addr, cli_addr;
     socklen_t cli_addr_len;
     pthread_t thread;
     
+    if (argc < 2) {
+        perror("Error, port undefined:");
+        exit(-1);
+    }
+    portno = atoi(argv[1]);
+    
     // Unbound server socket with protocol and type definition 
-    serv_sockfd = socket(AF_INET, SOCK_STREAM, NULL);
+    serv_sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (serv_sockfd < 0){
         perror("Socket creation error:");
         exit(-1);
@@ -43,7 +65,7 @@ int main(int argc, char *argv[]) {
     
     // Configure socket address and bind it to serv_sockfd
     memset(&serv_addr, 0, sizeof serv_addr);
-    port_num = htons(SERVER_PORT);              // Port number in network byte order
+    port_num = htons(portno);              // Port number in network byte order
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = port_num;
     serv_addr.sin_addr.s_addr = INADDR_ANY;
@@ -54,6 +76,7 @@ int main(int argc, char *argv[]) {
     }
     
     // Listen for socket connections
+    connections = list_create();
     listen(serv_sockfd, MAX_DEVICES);
     cli_addr_len = sizeof cli_addr;
     while (1){
@@ -86,16 +109,15 @@ void* data_handler(void* id){
     char info_buffer[SOCK_SEND_BSIZE];
     char latitude_string[18];
     char longitude_string[18];
-    char data_string[11];
     int handler_id = (int) id;
     int n;
     int i, char_i, buffer_i, data_buffer_i;
-    Nodo* temp_nodo;
+    Node* temp_node;
     
     while (1){
-        memset(&info_buffer, NULL, SOCK_SEND_BSIZE);
-        temp_nodo = list_search(connections, handler_id);
-        n = read(temp_nodo->newsockfd, info_buffer, SOCK_SEND_BSIZE);
+        memset(&info_buffer, 0, SOCK_SEND_BSIZE);
+        temp_node = list_search(connections, handler_id);
+        n = read(temp_node->newsockfd, info_buffer, SOCK_SEND_BSIZE);
         if (n != 0){
             if (n < 0){
                 perror("Error on socket reading");
@@ -110,28 +132,32 @@ void* data_handler(void* id){
             // Check for location information
             if (info_buffer[1]){
                 buffer_i = 3;
-                printf("(latitude, longitude) = (");
+                
                 for(char_i = 0; char_i < 17; char_i++, buffer_i++)
-                    latitude_string[i] = info_buffer[buffer_i]; 
+                    latitude_string[char_i] = info_buffer[buffer_i]; 
+            
                 for(char_i = 0; char_i < 17; char_i++, buffer_i++)
-                    longitude_string[i] = info_buffer[buffer_i]; 
-                printf("%s,%s)\n", latitude_string, longitude_string);
+                    longitude_string[char_i] = info_buffer[buffer_i]; 
+           
+                printf("Latitude: ");
+                puts(latitude_string);
+                printf("Longitude: ");
+                puts(longitude_string);
             }
             
             // Check for data window
             if (info_buffer[2]){                    // If data window is present
                 printf("Received data: ");
                 for(buffer_i = 37; buffer_i < SOCK_SEND_BSIZE; buffer_i++){
-                    putchar(info_buffer[buffer_i]);
-                    if ((buffer_i - 37) % 10 == 0)              // put a space after each number
-                        putchar(' ');
+                    putchar(info_buffer[buffer_i]);  
                 }
+                putchar('\n');
             }
         }
         else{
-            printf("Client %d disconected, closing connection and removing unused nodo\n", handler_id);
-            close(temp_nodo->newsockfd);
-            list_remove(nodo_list, handler_id);
+            printf("Client %d disconected, closing connection and removing unused node\n", handler_id);
+            close(temp_node->newsockfd);
+            list_remove(connections, handler_id);
             pthread_exit(NULL);
         }
     }
@@ -148,19 +174,22 @@ void* request_handler(void* id){
     int request;
     char request_buffer[1];
     char c;
-    Nodo* temp_nodo;
+    Node* temp_node;
     
     while(1){
         // Get request from stdin
         switch(getchar()){
             case 'l':
                 request = RQST_LOCATION;
+                printf("Location requested\n");
                 break;
             case 'e':
                 request = RQST_DATA_ENABLE;
+                printf("Data display enable requested\n");
                 break;
             case 'd':
                 request = RQST_DATA_DISABLE;
+                printf("Data display disable requested\n");
                 break;
             default:
                 request = 0;
@@ -168,8 +197,8 @@ void* request_handler(void* id){
         request_buffer[0] = (char) request;
         
         // Send request via socket
-        temp_nodo = list_search(connections, req_id);
-        if (write(temp_nodo->newsockfd, request_buffer, 1) < 0){
+        temp_node = list_search(connections, req_id);
+        if (write(temp_node->newsockfd, request_buffer, 1) < 0){
             perror("Socket writing error:");
             exit(-1);
         }
@@ -177,3 +206,47 @@ void* request_handler(void* id){
 
     }
 }
+
+// LINKED LISTS
+Node* list_create(void){
+    return (Node*) NULL;
+}
+
+Node* list_insert(Node* node, int id, int my_sockfd){
+    /* Inserts a node in the beginning of the list */
+    Node *new = (Node*)malloc(sizeof(Node));
+
+    new -> id = id;
+    new -> newsockfd = my_sockfd;
+    new -> next = node;
+    return new;
+}
+
+Node* list_search(Node* node, int id){
+    Node *p;
+
+    for(p=node;p!=NULL;p=p->next){
+        if(p->id == id) return p;
+    }
+    return NULL;
+}
+
+Node* list_remove(Node* node, int id){
+    Node *prev = NULL, *p = node;
+
+    while((p!=NULL) && (p->id != id)){
+        prev = p;
+        p = p->next;
+    }
+    if(p == NULL)
+        return node;
+    if(prev == NULL)
+        node = p -> next;
+    else{
+        prev -> next = p -> next;
+    }
+
+    free(p);
+    return node;
+}
+
