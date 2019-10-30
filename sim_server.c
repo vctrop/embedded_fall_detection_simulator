@@ -1,7 +1,4 @@
 #undef putchar
-// periodic includes
-#include <signal.h>
-#include <time.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,9 +9,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <errno.h>
-
-//#include "linked_list.h"
-//#include "periodic_signals.h"
+#include "linked_list.h"
 
 #define SOCK_SEND_BSIZE 1698			// 3 + 17*2 + 11*151
 #define MAX_DEVICES 50
@@ -22,17 +17,6 @@
 #define RQST_DATA_ENABLE    1
 #define RQST_DATA_DISABLE   -1
 #define RQST_LOCATION	    2	
-
-// Linked lists
-typedef struct node {
-    int id;
-    int newsockfd;
-    struct node* next;
-} Node;
-Node* list_create(void);
-Node* list_insert(Node* node, int id, int my_sockfd);
-Node* list_search(Node* node, int id);
-Node* list_remove(Node* node, int id);
 
 // Application
 pthread_mutex_t mutex_accept = PTHREAD_MUTEX_INITIALIZER;
@@ -111,7 +95,7 @@ void* data_handler(void* id){
     char longitude_string[18];
     int handler_id = (int) id;
     int n;
-    int i, char_i, buffer_i, data_buffer_i;
+    int char_i, buffer_i;
     Node* temp_node;
     
     while (1){
@@ -173,7 +157,6 @@ void* request_handler(void* id){
     int req_id = (int) id;
     int request;
     char request_buffer[1];
-    char c;
     Node* temp_node;
     
     while(1){
@@ -205,48 +188,5 @@ void* request_handler(void* id){
         request_buffer[0] = 0;
 
     }
-}
-
-// LINKED LISTS
-Node* list_create(void){
-    return (Node*) NULL;
-}
-
-Node* list_insert(Node* node, int id, int my_sockfd){
-    /* Inserts a node in the beginning of the list */
-    Node *new = (Node*)malloc(sizeof(Node));
-
-    new -> id = id;
-    new -> newsockfd = my_sockfd;
-    new -> next = node;
-    return new;
-}
-
-Node* list_search(Node* node, int id){
-    Node *p;
-
-    for(p=node;p!=NULL;p=p->next){
-        if(p->id == id) return p;
-    }
-    return NULL;
-}
-
-Node* list_remove(Node* node, int id){
-    Node *prev = NULL, *p = node;
-
-    while((p!=NULL) && (p->id != id)){
-        prev = p;
-        p = p->next;
-    }
-    if(p == NULL)
-        return node;
-    if(prev == NULL)
-        node = p -> next;
-    else{
-        prev -> next = p -> next;
-    }
-
-    free(p);
-    return node;
 }
 

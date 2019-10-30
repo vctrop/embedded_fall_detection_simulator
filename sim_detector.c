@@ -10,11 +10,10 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-#include <time.h>
 #include <signal.h>
 #include <errno.h>
 #include <math.h>
-//#include "periodic_signals.h"
+#include "periodic_signals.h"
 
 // General definitions
 #define NUM_THREADS 5
@@ -35,13 +34,6 @@
 #define SENSOR_PERIOD		  20000		// 0.02s
 #define DETECTOR_PERIOD		3020000		// 3.02 s
 
-// Periodic signals
-struct periodic_info{
-	int sig;
-	sigset_t alarm_sig;
-};
-static int make_periodic (int unsigned us_period, struct periodic_info *info);
-static void wait_period (struct periodic_info *info);
 
 // Application
 typedef struct gps_location{
@@ -214,10 +206,9 @@ void* read_accelerometer(void* arg){
 
 void* estimate_fall(void* arg){
     struct periodic_info info;
-    int window_begin, window_end;
     int i, buffer_i;                     
     float dot_product;
-    float sum, average, std;
+    float sum, average;
     int zero_cross_count;
     
     make_periodic (DETECTOR_PERIOD, &info);
@@ -319,7 +310,7 @@ void* write_socket(void* arg){
                 flag_location = 0;
                 buffer_i = 3;
                 printf("Buffering GPS data to send\n");
-                ret = gcvt(current_location.latitude, 15, coordinate_string);         // Convert latitude to string using 15 digits
+                ret = (int) gcvt(current_location.latitude, 15, coordinate_string);         // Convert latitude to string using 15 digits
                 printf("latitude: ");
                 puts(coordinate_string);
                 
@@ -332,7 +323,7 @@ void* write_socket(void* arg){
                     //printf("%c", info_buffer[buffer_i]);
                 }
                 
-                ret = gcvt(current_location.longitude, 15, coordinate_string);        // Convert longitude to string using 15 digits
+                ret = (int) gcvt(current_location.longitude, 15, coordinate_string);        // Convert longitude to string using 15 digits
                 printf("longitude: ");
                 puts(coordinate_string);
                 if(ret == 0){
@@ -352,7 +343,7 @@ void* write_socket(void* arg){
                 for(i = 0; i < WINDOW_SIZE; i++){
                     buffer_i = 37 + i * 11;
                     data_buffer_i = i + (1 - buf_dirty_half) * WINDOW_SIZE;
-                    ret = gcvt(data_buffer[data_buffer_i], 8, data_string);
+                    ret = (int) gcvt(data_buffer[data_buffer_i], 8, data_string);
                     if(ret == 0){
                         perror("Error when converting float to string:");
                         exit(-1);
@@ -372,53 +363,4 @@ void* write_socket(void* arg){
         pthread_mutex_unlock(&mutex);
         
     }
-}
-
-// PERIODIC SIGNALS (Third party)
-static int make_periodic (int unsigned us_period, struct periodic_info *info)
-{
-	static int next_sig;
-	int ret;
-	unsigned int ns;
-	unsigned int sec;
-	struct sigevent sigev;
-	timer_t timer_id;
-	struct itimerspec itval;
-
-	/* Initialise next_sig first time through. We can't use static
-	   initialisation because SIGRTMIN is a function call, not a constant */
-	if (next_sig == 0)
-		next_sig = SIGRTMIN;
-	/* Check that we have not run out of signals */
-	if (next_sig > SIGRTMAX)
-		return -1;
-	info->sig = next_sig;
-	next_sig++;
-	/* Create the signal mask that will be used in wait_period */
-	sigemptyset (&(info->alarm_sig));
-	sigaddset (&(info->alarm_sig), info->sig);
-
-	/* Create a timer that will generate the signal we have chosen */
-	sigev.sigev_notify = SIGEV_SIGNAL;
-	sigev.sigev_signo = info->sig;
-	sigev.sigev_value.sival_ptr = (void *) &timer_id;
-	ret = timer_create (CLOCK_MONOTONIC, &sigev, &timer_id);
-	if (ret == -1)
-		return ret;
-
-	/* Make the timer periodic */
-	sec = us_period/1000000;
-	ns = (us_period - (sec * 1000000)) * 1000;
-	itval.it_interval.tv_sec = sec;
-	itval.it_interval.tv_nsec = ns;
-	itval.it_value.tv_sec = sec;
-	itval.it_value.tv_nsec = ns;
-	ret = timer_settime (timer_id, 0, &itval, NULL);
-	return ret;
-}
-
-static void wait_period (struct periodic_info *info)
-{
-	int sig;
-	sigwait (&(info->alarm_sig), &sig);
 }
